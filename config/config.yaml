@@ -1,0 +1,392 @@
+
+# =============================================================================
+# Emotional & Mental Health Monitoring - NLP-Based Sentiment Analysis
+# Central configuration. Every script in src/ and scripts/ should read from
+# here (via src/utils.py: load_config) rather than hard-coding values.
+#
+# To override locally without editing this file, create config/local.yaml
+# (git-ignored) and merge it on top in load_config().
+# =============================================================================
+
+project:
+  name: mental-health-nlp
+  version: "0.1.0"
+  seed: 42                      # one seed everywhere -> fair, reproducible comparisons
+  disclaimer: >
+    This is a wellness-support and early-awareness tool. It is NOT a diagnostic
+    instrument and does not replace a qualified mental health professional.
+
+# -----------------------------------------------------------------------------
+# Paths (relative to repository root)
+# -----------------------------------------------------------------------------
+paths:
+  data_raw: data/raw
+  data_interim: data/interim
+  data_processed: data/processed
+  data_splits: data/splits
+  models_dir: models
+  results_dir: results
+  figures_dir: results/figures
+  reports_dir: results/reports
+  database: data/processed/mood_history.db
+
+# -----------------------------------------------------------------------------
+# Emotion taxonomy (8 application-relevant classes, from the synopsis)
+# -----------------------------------------------------------------------------
+labels:
+  classes: [Joy, Sadness, Anger, Fear, Anxiety, Stress, Surprise, Neutral]
+  # Used by the trend + recommendation modules
+  negative_classes: [Sadness, Anger, Fear, Anxiety, Stress]
+  positive_classes: [Joy]
+  neutral_classes: [Neutral, Surprise]
+
+# -----------------------------------------------------------------------------
+# Datasets
+# -----------------------------------------------------------------------------
+data:
+  goemotions:
+    enabled: true
+    role: primary fine-grained emotion classification
+    hf_dataset_id: google-research-datasets/go_emotions   # verify id on the HF Hub if loading fails
+    hf_config: simplified
+    raw_filename: goemotions.csv
+    # GoEmotions is multi-label. Policy for collapsing to single-label 8-class data:
+    #   drop_conflicting : keep rows whose labels all map to ONE of our 8 classes (recommended)
+    #   first_label      : keep the first annotated label only
+    multilabel_policy: drop_conflicting
+
+  dreaddit:
+    enabled: true
+    role: Stress class + domain fine-tuning
+    download_url: http://www.cs.columbia.edu/~eturcan/data/dreaddit.zip   # verify; manual download is fine
+    raw_filename: dreaddit.csv
+    max_tokens: 128                  # posts are long -> truncate
+    # label==1 (stressed) -> "stress". label==0 (not stressed) is NOT the same as "neutral".
+    #   drop        : discard non-stressed posts (recommended; avoids label noise)
+    #   as_neutral  : map to neutral (only if you can justify it in the report)
+    non_stressed_policy: drop
+
+  sentiment140:
+    enabled: false                   # optional coarse benchmark; skip if short on time
+    role: supplementary pretraining / coarse sentiment benchmark
+    source: kaggle kazanova/sentiment140 or HF stanfordnlp/sentiment140   # verify
+    raw_filename: sentiment140.csv
+    subsample_size: 50000            # 1.6M tweets is far too large; subsample
+
+  text_column: text
+  label_column: label
+  min_text_chars: 3                  # drop empty / near-empty rows
+
+  # Stratified splits - create ONCE (Day 1) and never change the test set
+  splits:
+    train: 0.80
+    val: 0.10
+    test: 0.10
+    stratify: true
+    filenames:
+      train: train.csv
+      val: val.csv
+      test: test.csv
+
+# -----------------------------------------------------------------------------
+# GoEmotions (27 + neutral) -> 8-class mapping
+# Anxiety comes only from "nervousness"; Stress comes ONLY from Dreaddit.
+# Labels not listed here are dropped. Review and justify this mapping in the report.
+# -----------------------------------------------------------------------------
+label_mapping:
+  goemotions:
+    Joy:      [admiration, amusement, approval, caring, excitement, gratitude, joy, love, optimism, pride, relief]
+    Sadness:  [sadness, grief, disappointment, remorse, embarrassment]
+    Anger:    [anger, annoyance, disapproval, disgust]
+    Fear:     [fear]
+    Anxiety:  [nervousness]
+    Surprise: [surprise, realization]
+    Neutral:  [neutral, confusion, curiosity, desire]
+  dreaddit:
+    stressed: stress
+    not_stressed: null               # see data.dreaddit.non_stressed_policy
+
+# -----------------------------------------------------------------------------
+# Preprocessing
+# -----------------------------------------------------------------------------
+preprocessing:
+  lowercase: true
+  remove_urls: true
+  remove_html: true
+  remove_user_handles: true          # @mentions and u/ r/ references
+  normalize_punctuation: true
+  demojize_emojis: true              # keep affective signal: :crying_face: -> "crying face"
+  lemmatize: true                    # classical + Bi-LSTM pipelines
+  remove_stopwords_classical_only: true   # transformers always receive raw (cleaned) text
+  keep_negations: true               # keep "not", "no", "never" even when stripping stop-words
+  spacy_model: en_core_web_sm
+
+# -----------------------------------------------------------------------------
+# Models
+# -----------------------------------------------------------------------------
+models:
+  classical:
+    tfidf:
+      max_features: 50000
+      ngram_range: [1, 2]
+      min_df: 2
+      sublinear_tf: true
+    logistic_regression:
+      C: 1.0
+      max_iter: 1000
+      solver: lbfgs
+    linear_svc:
+      C: 1.0
+      max_iter: 5000
+    random_forest:
+      n_estimators: 300
+      max_depth: null
+      n_jobs: -1
+    output_dir: models/classical
+
+  bilstm:
+    embedding: glove-wiki-gigaword-100     # gensim.downloader name
+    embedding_dim: 100
+    freeze_embeddings: false
+    hidden_size: 128
+    num_layers: 1
+    bidirectional: true
+    dropout: 0.3
+    max_len: 64
+    vocab_max_size: 30000
+    batch_size: 64
+    epochs: 10
+    learning_rate: 0.001
+    early_stopping_patience: 2
+    output_dir: models/bilstm
+
+  transformers:
+    # Shared fine-tuning settings (identical across models for a fair comparison)
+    max_len: 64
+    epochs: 3
+    batch_size: 32
+    learning_rate: 0.00002             # 2e-5
+    weight_decay: 0.01
+    warmup_ratio: 0.1
+    fp16: true                         # set false on CPU
+    gradient_accumulation_steps: 1
+    metric_for_best_model: macro_f1
+    early_stopping_patience: 2
+    save_total_limit: 2                # save checkpoints to Google Drive on Colab
+    distilbert:
+      pretrained: distilbert-base-uncased
+      output_dir: models/distilbert
+    roberta:
+      pretrained: roberta-base
+      output_dir: models/roberta
+
+  # Model whose mitigation experiments are run + used by the app (set after Day 6)
+  best_model_for_experiments: distilbert
+  deployed_model: distilbert
+
+# -----------------------------------------------------------------------------
+# Class-imbalance experiments (the research core)
+# RULE: mitigation touches the TRAIN split only. Val/test stay untouched.
+# -----------------------------------------------------------------------------
+imbalance:
+  experiments:
+    - baseline            # unmitigated
+    - class_weighting
+    - random_oversampling
+    - synonym_augmentation
+    - backtranslation_augmentation
+  class_weighting:
+    mode: balanced                     # balanced | sqrt_balanced
+  random_oversampling:
+    sampling_strategy: not majority    # imbalanced-learn strategy name
+  minority_threshold_share: 0.05       # classes with <5% of train rows are "minority"
+  primary_metric: per_class_f1
+  secondary_metric: macro_f1
+
+augmentation:
+  minority_classes_only: true
+  target_min_samples_per_class: 3000   # augment up to roughly this many train rows per class
+  synonym_replacement:
+    library: nlpaug
+    aug_p: 0.15
+    n_aug_per_sample: 2
+  back_translation:
+    enabled: true
+    pivot_language: fr                 # en -> fr -> en
+    forward_model: Helsinki-NLP/opus-mt-en-fr
+    backward_model: Helsinki-NLP/opus-mt-fr-en
+    batch_size: 32
+    max_length: 128
+
+# -----------------------------------------------------------------------------
+# Temporal aggregation (daily / weekly / monthly mood trends)
+# -----------------------------------------------------------------------------
+trends:
+  min_confidence: 0.40                 # ignore very uncertain predictions
+  # Sentiment score in [-1, +1] per emotion; multiplied by prediction confidence
+  sentiment_scores:
+    joy: 1.0
+    surprise: 0.2
+    neutral: 0.0
+    sadness: -0.7
+    anger: -0.8
+    fear: -0.7
+    anxiety: -0.8
+    stress: -0.8
+  windows:
+    daily:   { freq: D, rolling_days: 1 }
+    weekly:  { freq: W, rolling_days: 7 }
+    monthly: { freq: M, rolling_days: 30 }
+  dominant_emotion_method: mode        # mode | confidence_weighted
+  # No real per-user timelines exist -> build SIMULATED ones (state this in the report)
+  simulation:
+    seed: 42
+    messages_per_day: [2, 5]           # min, max
+    scenarios:
+      - name: drift_joy_to_sadness_stress
+        days: 21
+        phases:
+          - { days: 7, mix: { joy: 0.6, neutral: 0.3, surprise: 0.1 } }
+          - { days: 7, mix: { neutral: 0.4, sadness: 0.3, stress: 0.2, joy: 0.1 } }
+          - { days: 7, mix: { sadness: 0.4, stress: 0.35, anxiety: 0.15, neutral: 0.1 } }
+      - name: stable_positive
+        days: 21
+        phases:
+          - { days: 21, mix: { joy: 0.6, neutral: 0.3, surprise: 0.1 } }
+      - name: recovery
+        days: 21
+        phases:
+          - { days: 7, mix: { sadness: 0.45, anxiety: 0.25, stress: 0.2, neutral: 0.1 } }
+          - { days: 7, mix: { neutral: 0.45, sadness: 0.25, joy: 0.2, stress: 0.1 } }
+          - { days: 7, mix: { joy: 0.5, neutral: 0.4, surprise: 0.1 } }
+      - name: persistent_anxiety
+        days: 21
+        phases:
+          - { days: 21, mix: { anxiety: 0.35, fear: 0.2, stress: 0.25, neutral: 0.2 } }
+  trend_quality:
+    metric: agreement                  # share of days where aggregated dominant emotion's valence matches the scripted phase
+    valence_groups:
+      positive: [joy, surprise]
+      neutral: [neutral]
+      negative: [sadness, anger, fear, anxiety, stress]
+
+# -----------------------------------------------------------------------------
+# Recommendation + safety escalation (rule-based, non-diagnostic)
+# -----------------------------------------------------------------------------
+recommend:
+  # Escalate when the share of negative-emotion messages in a rolling window
+  # exceeds the threshold. TUNE AND JUSTIFY this in the report.
+  escalation:
+    window_days: 7                     # roadmap suggests 7-14
+    alt_window_days: 14
+    negative_share_threshold: 0.60
+    min_messages_in_window: 5          # avoid escalating on a handful of messages
+    persistence_days: 3                # negative dominant emotion for >= N consecutive days
+  suggestions:
+    stress:
+      title: A moment to breathe
+      text: "Try a slow breathing exercise: breathe in for 4 seconds, hold for 4, breathe out for 6. Repeat for a few minutes."
+    anxiety:
+      title: Ground yourself
+      text: "Try the 5-4-3-2-1 grounding exercise: name 5 things you see, 4 you can touch, 3 you hear, 2 you smell, 1 you taste."
+    sadness:
+      title: Be gentle with yourself
+      text: "Consider reaching out to someone you trust, or taking a short walk. Curated self-care resources are listed below."
+    anger:
+      title: Take a pause
+      text: "Stepping away for a few minutes, stretching, or writing down what you feel can help you cool down before responding."
+    fear:
+      title: You are not alone
+      text: "Naming what worries you and sharing it with someone you trust can make it feel more manageable."
+    joy:
+      title: Nice to see
+      text: "It sounds like things are going well. Consider noting what contributed to this so you can come back to it later."
+    surprise:
+      title: Noted
+      text: "Unexpected moments can stir up a lot. Take a moment to notice how you are feeling about it."
+    neutral:
+      title: Thanks for checking in
+      text: "Regular check-ins help you notice changes in how you feel over time."
+  escalation_message: >
+    Over the past {window_days} days, many of your messages have expressed difficult feelings.
+    This tool cannot diagnose anything, but you deserve support. Please consider talking to a
+    qualified mental health professional or someone you trust.
+  # VERIFY every number below before shipping or demoing. Numbers change.
+  helplines:
+    - { country: IN, name: Tele-MANAS, number: "14416", verified: false }
+    # - { country: US, name: 988 Suicide & Crisis Lifeline, number: "988", verified: false }
+  default_country: IN
+  forbidden_phrases:                   # linted by tests/test_recommend.py - wording must stay non-diagnostic
+    - "you have depression"
+    - "you are depressed"
+    - "you have anxiety disorder"
+    - "diagnosis"
+    - "diagnosed"
+
+# -----------------------------------------------------------------------------
+# Storage + privacy
+# -----------------------------------------------------------------------------
+database:
+  engine: sqlite                       # synopsis lists MongoDB/MySQL/Firebase; SQLite is fine for the prototype
+  path: data/processed/mood_history.db
+  table: predictions
+  # (user_id, timestamp, emotion, confidence, sentiment_score)
+  columns: [user_id, timestamp, emotion, confidence, sentiment_score]
+
+privacy:
+  consent_required: true               # app must show consent notice before first prediction
+  store_raw_text: false                # default: store only the prediction, never the text
+  anonymize_user_id: true
+  consent_notice: >
+    Your messages are analysed to estimate emotions. By default, the text itself is not stored -
+    only the predicted emotion, a confidence score and a timestamp. You can delete your history at any time.
+
+# -----------------------------------------------------------------------------
+# Evaluation
+# -----------------------------------------------------------------------------
+evaluation:
+  metrics: [accuracy, precision, recall, f1, macro_f1]
+  average: macro
+  per_class_report: true
+  confusion_matrix: true
+  zero_division: 0
+  results_files:
+    model_metrics: results/model_metrics.csv
+    model_comparison: results/model_comparison.csv
+    imbalance_results: results/imbalance_results.csv
+    trend_quality: results/trend_quality.csv
+    latency_results: results/latency_results.csv
+  latency:
+    warmup_runs: 10
+    n_runs: 100
+    sample_texts:
+      - "I can't sleep and my mind keeps racing about tomorrow."
+      - "Honestly today was great, we finally finished the project!"
+      - "ok"
+  error_analysis:
+    categories: [sarcasm, short_text, minority_class, mixed_emotion]
+    short_text_max_tokens: 5
+
+# -----------------------------------------------------------------------------
+# App (Streamlit dashboard; the roadmap notes this is much faster than Flask + JS)
+# -----------------------------------------------------------------------------
+app:
+  framework: streamlit
+  title: "Mood Monitor - Emotional Wellness Support"
+  port: 8501
+  show_disclaimer_banner: true
+  show_confidence: true
+  max_input_chars: 1000
+
+# -----------------------------------------------------------------------------
+# Inference
+# -----------------------------------------------------------------------------
+inference:
+  kind: classical
+  path: models/classical/logreg_baseline/pipeline.joblib
+  device: cpu
+  batch_size: 64
+
+logging:
+  level: INFO
+  file: null

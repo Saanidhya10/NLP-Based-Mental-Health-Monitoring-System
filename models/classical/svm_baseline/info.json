@@ -1,0 +1,16 @@
+{
+  "model": "svm",
+  "strategy": "baseline",
+  "seed": 42,
+  "best_params": {
+    "C": 1.0,
+    "max_iter": 5000,
+    "max_features": 50000,
+    "ngram_range": [
+      1,
+      2
+    ]
+  },
+  "val_macro_f1": 0.5744141197954169,
+  "test_macro_f1": 0.5605321366966658
+}

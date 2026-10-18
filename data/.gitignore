@@ -1,0 +1,11 @@
+# keep the folder structure and README, ignore the (large / licensed / private) data files
+raw/*
+interim/*
+processed/*
+splits/*
+!raw/.gitkeep
+!interim/.gitkeep
+!processed/.gitkeep
+!splits/.gitkeep
+!README.md
+!.gitignore

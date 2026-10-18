@@ -1,0 +1,97 @@
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+*.install.log
+.install.log
+
+# ---------- Virtual environments ----------
+.venv/
+venv/
+env/
+ENV/
+
+# ---------- Secrets / local config ----------
+.env
+.env.*
+*.secret
+config/local.yaml
+
+# ---------- Jupyter ----------
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# ---------- Data (large / licensed / possibly sensitive) ----------
+data/raw/*
+data/interim/*
+data/processed/*
+data/splits/*
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+!data/splits/.gitkeep
+!data/splits/split_manifest.json
+!data/README.md
+
+# ---------- Trained models / checkpoints (large) ----------
+models/**/*.pt
+models/**/*.pth
+models/**/*.bin
+models/**/*.safetensors
+models/**/*.ckpt
+models/**/*.h5
+models/**/*.joblib
+models/**/checkpoint-*/
+models/**/runs/
+!models/**/.gitkeep
+!models/**/info.json
+!models/**/README.md
+
+# Allow small ready-to-run baseline model (<5MB), ignore heavy RF (>1GB)
+!models/classical/logreg_baseline/pipeline.joblib
+
+# ---------- Databases (privacy) ----------
+*.db
+*.sqlite
+*.sqlite3
+
+# ---------- Results ----------
+results/**/*.tmp
+results/**/*.log
+results/**/*.npy
+results/**/*.npz
+
+# ---------- Experiment tracking / logs ----------
+wandb/
+mlruns/
+runs/
+logs/
+*.log
+lightning_logs/
+
+# ---------- Caches ----------
+.cache/
+hf_cache/
+nltk_data/
+
+# ---------- Streamlit ----------
+.streamlit/secrets.toml
+
+# ---------- OS / IDE ----------
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/settings.json
+*.swp
